@@ -1,6 +1,7 @@
 package com.interface21.jdbc.core;
 
 import com.interface21.dao.DataAccessException;
+import com.interface21.jdbc.CannotGetJdbcConnectionException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -127,6 +128,38 @@ class JdbcTemplateTest {
 
         verify(statement).close();
         verify(connection).close();
+    }
+
+    @Test
+    void updateKeepsOriginalExceptionWhenReleaseFails() throws SQLException {
+        final var sqlFailure = new SQLException("SQL execution failed");
+        when(statement.executeUpdate()).thenThrow(sqlFailure);
+        doThrow(new SQLException("close failed")).when(connection).close();
+
+        assertThatThrownBy(() -> jdbcTemplate.update(
+                "update users set password = ?",
+                "newPassword"
+        ))
+                .isInstanceOf(DataAccessException.class)
+                .hasCause(sqlFailure)
+                .satisfies(e -> assertThat(e.getSuppressed())
+                        .singleElement()
+                        .isInstanceOf(CannotGetJdbcConnectionException.class));
+    }
+
+    @Test
+    void updateThrowsReleaseFailureWhenSqlSucceeds() throws SQLException {
+        when(statement.executeUpdate()).thenReturn(1);
+        doThrow(new SQLException("close failed")).when(connection).close();
+
+        assertThatThrownBy(() -> jdbcTemplate.update(
+                "update users set password = ?",
+                "newPassword"
+        ))
+                .isInstanceOf(CannotGetJdbcConnectionException.class)
+                .hasRootCauseMessage("close failed");
+
+        verify(statement).executeUpdate();
     }
 
     @Test

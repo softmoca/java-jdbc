@@ -37,6 +37,7 @@ public class TxUserService implements UserService {
 
         Connection connection = DataSourceUtils.getConnection(dataSource);
         boolean bound = false;
+        Throwable originalFailure = null;
 
         try {
             connection.setAutoCommit(false);
@@ -49,8 +50,9 @@ public class TxUserService implements UserService {
                 connection.commit();
 
             } catch (SQLException e) {
-                rollback(connection, e);
-                throw new DataAccessException(e);
+                DataAccessException failure = new DataAccessException(e);
+                rollback(connection, failure);
+                throw failure;
 
             } catch (RuntimeException | Error e) {
                 rollback(connection, e);
@@ -58,14 +60,56 @@ public class TxUserService implements UserService {
             }
 
         } catch (SQLException e) {
-            throw new DataAccessException(e);
+            DataAccessException failure = new DataAccessException(e);
+            originalFailure = failure;
+            throw failure;
+
+        } catch (RuntimeException | Error e) {
+            originalFailure = e;
+            throw e;
 
         } finally {
+            releaseConnection(connection, bound, originalFailure);
+        }
+    }
+
+    private void releaseConnection(
+            Connection connection,
+            boolean bound,
+            Throwable originalFailure) {
+
+        Throwable cleanupFailure = null;
+
+        try {
             if (bound) {
                 TransactionSynchronizationManager.unbindResource(dataSource);
             }
+        } catch (RuntimeException | Error e) {
+            cleanupFailure = e;
+        }
 
+        try {
             DataSourceUtils.releaseConnection(connection, dataSource);
+        } catch (RuntimeException | Error e) {
+            if (cleanupFailure == null) {
+                cleanupFailure = e;
+            } else if (cleanupFailure != e) {
+                cleanupFailure.addSuppressed(e);
+            }
+        }
+
+        if (cleanupFailure == null) {
+            return;
+        }
+
+        if (originalFailure != null) {
+            if (originalFailure != cleanupFailure) {
+                originalFailure.addSuppressed(cleanupFailure);
+            }
+        } else if (cleanupFailure instanceof RuntimeException e) {
+            throw e;
+        } else {
+            throw (Error) cleanupFailure;
         }
     }
 

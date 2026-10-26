@@ -71,11 +71,27 @@ public class JdbcTemplate {
             Object... params) {
 
         Connection connection = DataSourceUtils.getConnection(dataSource);
+        Throwable originalFailure = null;
 
         try {
             return execute(connection, sql, callback, params);
+
+        } catch (RuntimeException | Error e) {
+            originalFailure = e;
+            throw e;
+
         } finally {
-            DataSourceUtils.releaseConnection(connection, dataSource);
+            try {
+                DataSourceUtils.releaseConnection(connection, dataSource);
+            } catch (RuntimeException | Error releaseFailure) {
+                if (originalFailure != null) {
+                    if (originalFailure != releaseFailure) {
+                        originalFailure.addSuppressed(releaseFailure);
+                    }
+                } else {
+                    throw releaseFailure;
+                }
+            }
         }
     }
 
